@@ -1,6 +1,6 @@
 {
   "name": "dsh-grafana-plugin",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Grafana 集成插件：替代重型 Grafana MCP server，提供 dashboard/folder 查询、Prometheus/Loki 查询、Alerting 只读工具（按类别裁剪工具面），并在插件页提供设置面板。",
   "license": "MIT",
   "type": "module",
@@ -17,6 +17,9 @@
   },
   "files": [
     "lib",
+    "src",
+    "build-faces.ts",
+    "scripts/prepare.ts",
     "cordis.patch.yml"
   ],
   "engines": {
@@ -49,20 +52,21 @@
         "@deepseek-ai/dsh-client-ui-plugin-manager",
         "@deepseek-ai/dsh-api-remotes",
         "@deepseek-ai/dsh-client-store",
-        "@deepseek-ai/dsh-client-ui-primitives",
         "@deepseek-ai/dsh-client-ui-slots",
         "@deepseek-ai/dsh-client-ui-renderer"
       ],
       "platform": "web"
     }
   },
-  "peerDependencies": {
+  "//peers": "The harness packages this plugin runs against are deliberately NOT declared here. pnpm resolves a peer's own peer graph when installing, and that walk reaches harness-internal packages that were never published (@deepseek-ai/dsh-type-meta), so ANY @deepseek-ai peer entry - required or optional - makes `dsh plugin add github:...` fail with ERR_PNPM_FETCH_404 before prepare can run. dsh supplies these modules from its own runtime, so nothing is lost; the local build/devDependencies still type-check against them.",
+  "dependencies": {
+    "esbuild": "^0.28.2"
+  },
+  "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1-rc.1",
     "@deepseek-ai/dsh-system-prompt": "*",
     "@deepseek-ai/dsh-tools": "*",
-    "@deepseek-ai/schemastery": "^3.18.1-rc.1"
-  },
-  "devDependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1-rc.1",
     "@types/node": "^26.6.3",
     "@types/react": "^19.3.0",
     "react": "^19.3.0",
@@ -70,7 +74,8 @@
     "typescript": "^5.9.0"
   },
   "scripts": {
+    "prepare": "node --experimental-strip-types scripts/prepare.ts",
     "build": "powershell -ExecutionPolicy Bypass -File scripts/build.ps1",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.client.json"
   }
 }

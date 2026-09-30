@@ -8,6 +8,8 @@
 用法：python scripts/link_deps.py
 """
 import os
+import json
+import shutil
 import subprocess
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -20,9 +22,12 @@ CACHE_AI = r"C:\Users\sczl\AppData\Local\npm-cache\_npx"
 CACHE_TOP = CACHE_AI
 
 # Node 端宿主依赖（构建/类型用；运行时由 dsh Loader 提供）
+# 包含 dsh-tools 自身的 peer 依赖：node 直接加载该包时会解析它们。
 NODE_DEPS = [
     "cordis", "cosmokit", "schemastery", "cordis-plugin-loader",
     "dsh-tools", "dsh-system-prompt",
+    "dsh-scope", "dsh-agent", "dsh-llm", "dsh-session",
+    "dsh-user-approval", "dsh-invariants", "dsh-code-runtime",
 ]
 # 浏览器端宿主依赖（设置面板浏览器半侧用；运行时由 web shell 模块表提供）
 # 注意:checkout 的 client 包目录名是 dsh-client-* / dsh-ui-* 对应包名
@@ -35,8 +40,33 @@ CLIENT_DEPS = [
 ]
 
 
+def find_cached(name):
+    """在 npx 缓存中定位 dsh 发布包里的 @deepseek-ai/<name>。
+
+    npx 缓存是运行中的 dsh 实际加载的那棵树，所以它优先于源码 checkout：
+    两者混用会在导入期炸掉（checkout 的 dsh-llm 不再导出缓存版 dsh-tools
+    所引用的 CallId）。多个缓存目录时取版本最高的那个。
+    """
+    if not os.path.isdir(CACHE_AI):
+        return None
+    best, best_version = None, None
+    for entry in os.listdir(CACHE_AI):
+        cand = os.path.join(CACHE_AI, entry, "node_modules", "@deepseek-ai", name)
+        manifest = os.path.join(cand, "package.json")
+        if not os.path.isfile(manifest):
+            continue
+        try:
+            with open(manifest, encoding="utf-8") as handle:
+                version = json.load(handle).get("version", "")
+        except Exception:  # noqa: BLE001
+            version = ""
+        if best is None or version > (best_version or ""):
+            best, best_version = cand, version
+    return best
+
+
 def find_pkg(name):
-    """在源码 checkout 与 npx 缓存中定位 @deepseek-ai/<name>。"""
+    """在源码 checkout 中定位 @deepseek-ai/<name>（缓存的回退）。"""
     src = os.path.join(DSH_SOURCE, name)
     if os.path.isdir(src):
         return src
@@ -60,57 +90,96 @@ def find_pkg(name):
     alias = ALIASES.get(name)
     if alias and os.path.isdir(alias):
         return alias
-    if os.path.isdir(CACHE_AI):
-        for entry in os.listdir(CACHE_AI):
-            cand = os.path.join(CACHE_AI, entry, "node_modules", "@deepseek-ai", name)
-            if os.path.isdir(cand):
-                return cand
     return None
 
 
 def junction(dst, src):
+    """把 dst 建成指向 src 的目录联接，替换任何已存在的东西。
+
+    Windows 上目录联接要用 rmdir 移除（os.remove 对目录失败），这是之前
+    链接静默停留在旧目标上的原因。
+    """
     os.makedirs(os.path.dirname(dst), exist_ok=True)
-    if os.path.isdir(dst) and not os.path.islink(dst):
-        return "exists"
-    if os.path.islink(dst) or os.path.exists(dst):
+    if os.path.islink(dst):
+        os.rmdir(dst)
+    elif os.path.isdir(dst):
+        # A real directory is either a registry copy or an existing junction
+        # that os.path.islink does not report on Windows; rmdir removes a
+        # junction without touching its target, and rmtree handles the rest.
+        try:
+            os.rmdir(dst)
+        except OSError:
+            shutil.rmtree(dst, ignore_errors=True)
+    elif os.path.exists(dst):
         os.remove(dst)
     subprocess.run(["cmd", "/c", "mklink", "/J", dst, src], check=True, capture_output=True)
     return "linked"
 
 
 def main():
-    linked, missing = [], []
+    linked, missing, replaced = [], [], []
     # cordis/schemastery must resolve to the SAME copies the client packages'
-    # own merges use (checkout vendor), otherwise declare-module Context
-    # merges land on a different interface AND the published schemastery
-    # (3.18.2) lacks .volatile() which the settings-card flow requires.
+    # own merges use (checkout vendor). A registry copy breaks two things: the
+    # declare-module Context merges land on a different interface (so ctx.slots
+    # / ctx.configForms / ctx.locale vanish), and the published schemastery
+    # (3.18.2) predates `.volatile()`. `npm install` overwrites these with
+    # registry copies, so a real directory here is replaced, not skipped.
     for vendored, dst_name in (("vendor", "cordis"), ("vendor", "schemastery")):
         dst = os.path.join(TARGET, "@deepseek-ai", dst_name)
+        src = os.path.join(os.path.dirname(DSH_SOURCE), vendored, dst_name)
         if os.path.islink(dst):
             os.rmdir(dst)
-        if os.path.isdir(dst) and not os.path.islink(dst):
-            continue
-        src = os.path.join(os.path.dirname(DSH_SOURCE), vendored, dst_name)
+        elif os.path.isdir(dst):
+            shutil.rmtree(dst, ignore_errors=True)
+            replaced.append(dst_name)
         try:
             junction(dst, src)
             linked.append(f"{dst_name}({vendored})")
         except Exception as e:  # noqa: BLE001
             missing.append(f"{dst_name}({vendored})({e})")
-    for name in [n for n in NODE_DEPS + CLIENT_DEPS if n != "cordis"]:
+    # Host packages come from ONE consistent tree, chosen per group:
+    #
+    # - Browser packages (CLIENT_DEPS) prefer the CHECKOUT. The published cache
+    #   copies are a different API generation: their settings domain exposes
+    #   `ctx.settingsScope`, not the `ctx.configForms` this card is written
+    #   against, and their Context merges would land on a cordis instance other
+    #   than the vendor copy everything else resolves.
+    # - Node host packages (NODE_DEPS) prefer the CACHE, the tree the running
+    #   harness loads; mixing trees breaks at import time (a checkout dsh-llm no
+    #   longer exports the CallId the cached dsh-tools imports).
+    #
+    # `npm install` leaves registry copies in place; a real directory here is
+    # always replaced, never skipped.
+    def source_for(name):
+        # cordis-plugin-loader declares the `Events` entries this plugin
+        # subscribes to (`loader/volatile-update`); its merges must land on the
+        # same cordis instance, so it always follows the vendor pin.
+        if name in ("cordis-plugin-loader", *CLIENT_DEPS):
+            return find_pkg(name) or find_cached(name)
+        return find_cached(name) or find_pkg(name)
+
+    for name in [n for n in NODE_DEPS + CLIENT_DEPS if n not in ("cordis", "schemastery")]:
         dst = os.path.join(TARGET, "@deepseek-ai", name)
-        if os.path.isdir(dst) and not os.path.islink(dst):
-            continue
-        src = find_pkg(name)
-        if src:
-            try:
-                junction(dst, src)
-                linked.append(name)
-            except Exception as e:  # noqa: BLE001
-                missing.append(f"{name}({e})")
-        else:
+        src = source_for(name)
+        if src is None:
             missing.append(name)
+            continue
+        if os.path.islink(dst):
+            os.rmdir(dst)
+        elif os.path.isdir(dst):
+            # A real directory here is a registry copy from `npm install`; the
+            # host package must come from the harness tree instead.
+            shutil.rmtree(dst, ignore_errors=True)
+            replaced.append(name)
+        try:
+            junction(dst, src)
+            linked.append(name)
+        except Exception as e:  # noqa: BLE001
+            missing.append(f"{name}({e})")
 
     print("linked:", linked)
+    if replaced:
+        print("replaced registry copies with:", replaced)
     print("missing:", missing if missing else "none")
     if missing:
         raise SystemExit("有缺失的宿主依赖，请检查 DSH_SOURCE / CACHE_AI 路径。")

@@ -9,3 +9,7 @@ src/**/*.js
 src/**/*.js.map
 src/**/*.d.ts
 src/**/*.d.ts.map
+
+# Python bytecode from the helper scripts
+__pycache__/
+*.pyc
