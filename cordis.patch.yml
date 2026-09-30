@@ -1,11 +1,9 @@
 # dsh bundle patch: inserts the grafana plugin into a profile's layer stack.
-# Two rows: the root row (index.js — tools + volatile config) and the client
-# row (client-host.js — the Loader line the client module system hangs the
-# browser half on). The browser half mounts on the row whose module specifier
-# is exactly the bare package name; `./client-host` keeps the settings card's
-# lifecycle tied to its own row instead of the tools row.
+# One row is enough. The client module system hangs a package's browser half on
+# the row whose specifier resolves to the package ROOT, so this bare-name row
+# carries both the host half (index.js) and the settings card (lib/client.js).
+# A second row spelling a subpath (dsh-grafana-plugin/client-host) would resolve
+# to no package root and fail to import.
 - insert:
     - id: grafana-plugin
       name: dsh-grafana-plugin
-    - id: grafana-plugin-client
-      name: dsh-grafana-plugin/client-host

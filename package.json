@@ -12,7 +12,6 @@
       "default": "./lib/index.js"
     },
     "./client": "./lib/client.js",
-    "./client-host": "./lib/client-host.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },

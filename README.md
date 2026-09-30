@@ -27,7 +27,7 @@ Grafana 集成的 dsh 插件 —— 用轻量的原生工具替代重型 Grafana
 
 ## 配置
 
-在 profile 的 patch 里挂两行：插件本体与设置面板（浏览器半侧）：
+在 profile 的 patch 里挂**一行**即可——这一行同时承载宿主工具与设置面板：
 
 ```yaml
 - id: grafana-plugin
@@ -37,9 +37,13 @@ Grafana 集成的 dsh 插件 —— 用轻量的原生工具替代重型 Grafana
     token: glsa_xxx                     # 服务账号 token,留空则匿名
     timeoutMs: 30000                    # 单次请求超时(毫秒)
     categories: [dashboards, prometheus, loki, alerting]  # 启用的工具类别
-- id: grafana-plugin-client
-  name: dsh-grafana-plugin/client-host  # 挂载设置面板的浏览器半侧
 ```
+
+> **不要为浏览器半侧再挂一行。** 客户端模块系统只把包的下半侧挂到
+> **解析到包根**的那一行上（`exactPackageSpecifier`）；写 `dsh-grafana-plugin/client-host`
+> 这类子路径的行解析不到包根，会被判定为"非客户端行"，且该子路径不在 `exports` 里，
+> 于是加载直接失败（`failed to import`）并让整个 profile 少一项激活。宿主半侧
+> `lib/index.js` 与浏览器半侧 `lib/client.js` 都由这一行带动。
 
 ## 设置面板
 
@@ -93,7 +97,6 @@ node tests/live-check.mjs   # 真实实例冒烟(需 GRAFANA_TOKEN 环境变量)
 ```
 src/
 ├── index.ts                    # apply 入口:volatile Config + 按类别注册工具 + systemPrompt
-├── client-host.ts              # 空 apply,只为设置面板占一条 Loader 行
 ├── client.ts                   # Grafana HTTP 客户端(可注入 fetch、Bearer token、超时)
 ├── tools-dashboard.ts          # 仪表盘/文件夹/数据源
 ├── tools-prometheus.ts         # PromQL 查询与发现
