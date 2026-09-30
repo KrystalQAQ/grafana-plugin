@@ -6,27 +6,36 @@ import * as m from '../lib/index.js'
 const token = process.env.GRAFANA_TOKEN ?? ''
 if (token === '') throw new Error('GRAFANA_TOKEN env var is empty')
 
-const cfg = m.Config({
-  url: 'http://8.137.182.194:3002',
-  token,
-  timeoutMs: 30000,
-  categories: ['dashboards', 'loki', 'alerting'],
-})
+// Volatile references, exactly as the Cordis loader hands them over.
+const vol = value => ({ get: () => value })
+const cfg = {
+  url: vol('http://8.137.182.194:3002'),
+  token: vol(token),
+  timeoutMs: vol(30_000),
+  categories: vol(['dashboards', 'loki', 'alerting']),
+}
 const registered = new Map()
 m.apply(
-  { effect(fn) { fn() }, tools: { register(t) { registered.set(t.name, t) } }, systemPrompt: { section() {} }, console: { info() {} } },
+  {
+    effect(fn) { fn() },
+    on() {},
+    tools: { register(t) { registered.set(t.name, t); return () => { registered.delete(t.name) } } },
+    systemPrompt: { section() {} },
+    console: { info() {} },
+  },
   cfg,
 )
+console.log('registered tools:', registered.size)
 
 const ds = await registered.get('grafana_list_datasources').execute({})
 console.log('datasources:', ds.text.split('\n').slice(1).join(' | '))
 
 const lokiUid = ds.data.items[0].uid
-const logs = await registered.get('grafana_query_loki').execute({ datasourceUid: lokiUid, query: '{job="grafana"}', limit: 3 })
-console.log('loki query:', logs.text.split('\n')[0])
-
 const labels = await registered.get('grafana_list_loki_labels').execute({ datasourceUid: lokiUid })
 console.log('loki labels:', labels.text.split('\n').slice(1).join(' | '))
+
+const rules = await registered.get('grafana_list_alert_rules').execute({})
+console.log('alert rules:', rules.text.split('\n')[0])
 
 console.log('LIVE CHECKS PASSED')
 process.exit(0)

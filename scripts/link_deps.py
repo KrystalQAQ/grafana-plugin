@@ -21,8 +21,17 @@ CACHE_TOP = CACHE_AI
 
 # Node 端宿主依赖（构建/类型用；运行时由 dsh Loader 提供）
 NODE_DEPS = [
-    "cordis", "cosmokit", "schemastery",
+    "cordis", "cosmokit", "schemastery", "cordis-plugin-loader",
     "dsh-tools", "dsh-system-prompt",
+]
+# 浏览器端宿主依赖（设置面板浏览器半侧用；运行时由 web shell 模块表提供）
+# 注意:checkout 的 client 包目录名是 dsh-client-* / dsh-ui-* 对应包名
+# @deepseek-ai/dsh-client-store 等,包名 → 目录名映射在这里显式给出。
+CLIENT_DEPS = [
+    "dsh-client-store", "dsh-client-locale", "dsh-api-remotes",
+    "dsh-client-ui-primitives", "dsh-client-ui-slots",
+    "dsh-client-ui-plugin-manager", "dsh-client-ui-settings",
+    "dsh-client-ui-renderer",
 ]
 
 
@@ -31,6 +40,26 @@ def find_pkg(name):
     src = os.path.join(DSH_SOURCE, name)
     if os.path.isdir(src):
         return src
+    # 源码 checkout 中 client 包目录名与包名不同:包名 dsh-client-ui-primitives
+    # 对应目录 packages/client/ui-primitives、dsh-api-remotes 对应 packages/api/remotes。
+    # 相对 checkout 的 packages 根解析,不做 .. 跳级。
+    CHECKOUT = os.path.dirname(DSH_SOURCE)  # .../deepseek-harness
+    PKGS = os.path.join(CHECKOUT, "packages")
+    ALIASES = {
+        "cordis-plugin-loader": os.path.join(CHECKOUT, "vendor", "loader"),
+        "dsh-client-store": os.path.join(PKGS, "client", "store"),
+        "dsh-client-locale": os.path.join(PKGS, "client", "locale"),
+        "dsh-api-remotes": os.path.join(PKGS, "api", "remotes"),
+        "dsh-client-ui-primitives": os.path.join(PKGS, "client", "ui-primitives"),
+        "dsh-client-ui-slots": os.path.join(PKGS, "client", "ui-slots"),
+        "dsh-client-ui-plugin-manager": os.path.join(PKGS, "client", "ui-plugin-manager"),
+        "dsh-client-ui-settings": os.path.join(PKGS, "client", "ui-settings"),
+        "dsh-client-ui-renderer": os.path.join(PKGS, "client", "ui-renderer"),
+        "dsh-client-runtime": os.path.join(PKGS, "client", "modules"),
+    }
+    alias = ALIASES.get(name)
+    if alias and os.path.isdir(alias):
+        return alias
     if os.path.isdir(CACHE_AI):
         for entry in os.listdir(CACHE_AI):
             cand = os.path.join(CACHE_AI, entry, "node_modules", "@deepseek-ai", name)
@@ -51,7 +80,23 @@ def junction(dst, src):
 
 def main():
     linked, missing = [], []
-    for name in NODE_DEPS:
+    # cordis/schemastery must resolve to the SAME copies the client packages'
+    # own merges use (checkout vendor), otherwise declare-module Context
+    # merges land on a different interface AND the published schemastery
+    # (3.18.2) lacks .volatile() which the settings-card flow requires.
+    for vendored, dst_name in (("vendor", "cordis"), ("vendor", "schemastery")):
+        dst = os.path.join(TARGET, "@deepseek-ai", dst_name)
+        if os.path.islink(dst):
+            os.rmdir(dst)
+        if os.path.isdir(dst) and not os.path.islink(dst):
+            continue
+        src = os.path.join(os.path.dirname(DSH_SOURCE), vendored, dst_name)
+        try:
+            junction(dst, src)
+            linked.append(f"{dst_name}({vendored})")
+        except Exception as e:  # noqa: BLE001
+            missing.append(f"{dst_name}({vendored})({e})")
+    for name in [n for n in NODE_DEPS + CLIENT_DEPS if n != "cordis"]:
         dst = os.path.join(TARGET, "@deepseek-ai", name)
         if os.path.isdir(dst) and not os.path.islink(dst):
             continue

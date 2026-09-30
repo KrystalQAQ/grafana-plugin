@@ -6,15 +6,43 @@ import { startMockGrafana } from './mock-server.mjs'
 const PORT = 19301
 const server = await startMockGrafana(PORT)
 
+// Cordis hands the plugin Volatile references; this helper simulates one.
+const vol = value => ({ get: () => value })
+const config = {
+  url: vol(`http://127.0.0.1:${PORT}`),
+  token: vol('test-token-123'),
+  timeoutMs: vol(5000),
+  categories: vol(['dashboards', 'prometheus', 'loki', 'alerting']),
+}
+
 const registered = new Map()
+// Cordis keeps listeners registered for the life of the plugin; the mock
+// mirrors that (never drains the list on fire).
+const listeners = []
+const fireVolatileUpdate = () => { for (const fn of [...listeners]) fn() }
 const ctx = {
   effect(fn, key) { fn() },
-  tools: { register(t) { registered.set(t.name, t) } },
+  on(_event, fn) { listeners.push(fn) },
+  // The real ToolRegistry.register returns the exact unregister disposer.
+  tools: { register(t) { registered.set(t.name, t); return () => { registered.delete(t.name) } } },
   systemPrompt: { section() {} },
   console: { info() {} },
 }
-m.apply(ctx, { url: `http://127.0.0.1:${PORT}`, token: 'test-token-123', timeoutMs: 5000, categories: ['dashboards', 'prometheus', 'loki', 'alerting'] })
+m.apply(ctx, config)
 assert.equal(registered.size, 11, `expected 11 tools, got ${registered.size}`)
+
+// 0. volatile update swaps registrations in place (no duplicates)
+{
+  config.url = vol(`http://127.0.0.1:${PORT}`)
+  config.categories = vol(['loki'])
+  fireVolatileUpdate()
+  assert.equal(registered.size, 2, `after category shrink expected 2 tools, got ${registered.size}`)
+  assert.ok(registered.has('grafana_query_loki'))
+  // restore the full set for the numbered checks below
+  config.categories = vol(['dashboards', 'prometheus', 'loki', 'alerting'])
+  fireVolatileUpdate()
+  assert.equal(registered.size, 11, 'restored full tool set')
+}
 
 async function call(name, args) {
   return registered.get(name).execute(args)
@@ -117,17 +145,26 @@ async function call(name, args) {
   const registered2 = new Map()
   m.apply({
     effect(fn) { fn() },
-    tools: { register(t) { registered2.set(t.name, t) } },
+    on() {},
+    tools: { register(t) { registered2.set(t.name, t); return () => { registered2.delete(t.name) } } },
     systemPrompt: { section() {} },
     console: { info() {} },
-  }, { url: `http://127.0.0.1:${PORT}`, token: 'wrong-token', timeoutMs: 5000, categories: ['dashboards'] })
+  }, {
+    url: vol(`http://127.0.0.1:${PORT}`),
+    token: vol('wrong-token'),
+    timeoutMs: vol(5000),
+    categories: vol(['dashboards']),
+  })
   await assert.rejects(() => registered2.get('grafana_search_dashboards').execute({}), /401/)
 }
-// 19. schema/config validation round-trip
+// 19. schema/config validation round-trip: resolved section yields Volatile refs
 {
   const validated = m.Config({ url: 'http://x' })
-  assert.deepEqual(validated.categories, ['dashboards', 'prometheus', 'loki', 'alerting'])
-  assert.equal(validated.token, '')
+  assert.equal(validated.url.get(), 'http://x')
+  assert.deepEqual(validated.categories.get(), ['dashboards', 'prometheus', 'loki', 'alerting'])
+  // No default on the secret field: absent means undefined, not ''.
+  assert.equal(validated.token.get(), undefined)
+  assert.equal(validated.timeoutMs.get(), 30_000)
 }
 
 server.close()

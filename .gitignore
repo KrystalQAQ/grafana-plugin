@@ -1,3 +1,11 @@
 node_modules/
 lib/
+dist/
 *.tsbuildinfo
+
+# tsc may emit next to sources when a config loses its outDir; the real build
+# output lives under lib/.
+src/**/*.js
+src/**/*.js.map
+src/**/*.d.ts
+src/**/*.d.ts.map

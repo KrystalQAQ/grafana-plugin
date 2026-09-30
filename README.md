@@ -27,20 +27,38 @@ Grafana 集成的 dsh 插件 —— 用轻量的原生工具替代重型 Grafana
 
 ## 配置
 
+在 profile 的 patch 里挂两行：插件本体与设置面板（浏览器半侧）：
+
 ```yaml
 - id: grafana-plugin
   name: dsh-grafana-plugin
   config:
     url: http://localhost:3000          # 必填,Grafana 基地址
-    token: !!js process.env.GRAFANA_TOKEN  # 服务账号 token,留空则匿名
-    timeoutMs: 30000                     # 单次请求超时(毫秒)
+    token: glsa_xxx                     # 服务账号 token,留空则匿名
+    timeoutMs: 30000                    # 单次请求超时(毫秒)
     categories: [dashboards, prometheus, loki, alerting]  # 启用的工具类别
+- id: grafana-plugin-client
+  name: dsh-grafana-plugin/client-host  # 挂载设置面板的浏览器半侧
 ```
+
+## 设置面板
+
+配置字段全部声明为 **volatile**，因此可以在 Web 界面直接改，不用编辑 YAML 也不用重启：
+
+**侧栏 → 插件 → Grafana**（Official 分组）打开卡片，填 Grafana 地址 / token /
+超时，点保存。写入落在设置文档的 user 层，覆盖 patch 里的 composed 默认值；保存后
+`loader/volatile-update` 会就地重建工具集（先注销旧注册再注册新的），无需重载页面。
+
+- token 声明为 `role('secret')`：字面量不进表单响应，卡片只显示"已配置/未配置"，留空
+  表示保持当前值不变。
+- `categories` 目前只能通过 YAML 调整（面板暂未提供多选控件）。
+- 卡片只在 Host 服务 `grafana-plugin` 命名空间期间存在（`configForms.whileServed`），
+  没有组合这个插件的部署看不到它。
 
 ## 安装
 
 ```sh
-# 构建(Windows,Node 22+)
+# 构建(Windows,Node 22+)：host 半侧 + client types + browser 半侧
 powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 
 # 安装进 profile
@@ -53,7 +71,9 @@ python scripts/sync_profile.py web
 ## 测试
 
 ```sh
-node tests/e2e.mjs   # 19 项断言,起本地 mock Grafana,无需真实实例
+node tests/e2e.mjs          # 19 项断言(含 volatile 热更新),起本地 mock Grafana
+node scripts/check-client.cjs  # 9 项浏览器 bundle 合约检查
+node tests/live-check.mjs   # 真实实例冒烟(需 GRAFANA_TOKEN 环境变量)
 ```
 
 ## 与 Grafana MCP server 的取舍
@@ -72,13 +92,36 @@ node tests/e2e.mjs   # 19 项断言,起本地 mock Grafana,无需真实实例
 
 ```
 src/
-├── index.ts             # apply 入口:Config schema + 按类别注册工具 + systemPrompt
-├── client.ts            # Grafana HTTP 客户端(可注入 fetch、Bearer token、超时)
-├── tools-dashboard.ts   # 仪表盘/文件夹/数据源
-├── tools-prometheus.ts  # PromQL 查询与发现
-├── tools-loki.ts        # LogQL 查询与发现
-└── tools-alerting.ts    # 告警规则只读
+├── index.ts                    # apply 入口:volatile Config + 按类别注册工具 + systemPrompt
+├── client-host.ts              # 空 apply,只为设置面板占一条 Loader 行
+├── client.ts                   # Grafana HTTP 客户端(可注入 fetch、Bearer token、超时)
+├── tools-dashboard.ts          # 仪表盘/文件夹/数据源
+├── tools-prometheus.ts         # PromQL 查询与发现
+├── tools-loki.ts               # LogQL 查询与发现
+├── tools-alerting.ts           # 告警规则只读
+└── client/                     # 浏览器半侧(设置面板)
+    ├── index.ts                # 注册 plugins.item slot + 字典
+    ├── GrafanaCard.tsx         # 表单 UI(原生元素,不依赖 in-repo UI primitives)
+    ├── grafana-card-controller.ts  # 暂存表单 + configForms 命名空间读写
+    └── locales.ts              # 中英文案
+scripts/
+├── build.ps1                   # 一键:依赖 → host 半侧 → client types → browser 半侧
+├── link_deps.py                # junction 链接宿主依赖(cordis/schemastery 必须指向 vendor)
+├── sync_profile.py             # 把产物同步进已安装 profile
+└── check-client.cjs            # 浏览器 bundle 合约检查
 tests/
-├── mock-server.mjs      # 本地 mock Grafana HTTP 服务
-└── e2e.mjs              # 端到端断言
+├── mock-server.mjs             # 本地 mock Grafana HTTP 服务
+├── e2e.mjs                     # 19 项端到端断言
+└── live-check.mjs              # 真实实例冒烟
+tsconfig.json                   # host 半侧(Host 入口)
+tsconfig.client.json            # 双入口编译 → lib/types/{index,client/index}.js
+tsdown.node.config.ts           # host 半侧打包
+tsdown.client.config.ts         # browser 半侧打包(ModuleLoader factory 包装)
 ```
+
+### 为什么浏览器半侧不用 in-repo UI primitives
+
+`@deepseek-ai/dsh-client-ui-primitives` 的 barrel 会连带导出 markdown/KaTeX 资源，
+外部插件构建无法解析那串样式依赖（官方 `clientBundle` 预设也强制包必须位于
+`deepseek-harness/packages/*` 下）。因此设置卡片用原生元素渲染、直接复用
+`configForms` 服务契约与 `dsh-client-store`，产物仅 12 KB 且零样式依赖。

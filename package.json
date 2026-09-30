@@ -1,7 +1,7 @@
 {
   "name": "dsh-grafana-plugin",
-  "version": "0.1.0",
-  "description": "Grafana 集成插件：替代重型 Grafana MCP server，提供 dashboard/folder 查询、Prometheus/Loki 查询、Alerting 只读工具（按类别裁剪工具面）。",
+  "version": "0.2.0",
+  "description": "Grafana 集成插件：替代重型 Grafana MCP server，提供 dashboard/folder 查询、Prometheus/Loki 查询、Alerting 只读工具（按类别裁剪工具面），并在插件页提供设置面板。",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
@@ -11,6 +11,8 @@
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
     },
+    "./client": "./lib/client.js",
+    "./client-host": "./lib/client-host.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
@@ -30,10 +32,8 @@
         "grafana_query_prometheus",
         "grafana_list_prometheus_metrics",
         "grafana_list_prometheus_labels",
-        "grafana_list_prometheus_label_values",
         "grafana_query_loki",
         "grafana_list_loki_labels",
-        "grafana_list_loki_label_values",
         "grafana_list_alert_rules",
         "grafana_get_alert_rule"
       ]
@@ -42,6 +42,19 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-plugin-manager",
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-store",
+        "@deepseek-ai/dsh-client-ui-primitives",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-renderer"
+      ],
+      "platform": "web"
     }
   },
   "peerDependencies": {
@@ -52,6 +65,8 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.3",
+    "@types/react": "^19.3.0",
+    "react": "^19.3.0",
     "tsdown": "^0.19.0",
     "typescript": "^5.9.0"
   },
